@@ -1,0 +1,111 @@
+// ==UserScript==
+// @name         Date Diff Appender (Handle Missing End Date)
+// @namespace    http://tampermonkey.net/
+// @version      1.8
+// @description  Append date difference from start date to today, handle missing end date, inside #job-history only.
+// @author       kundas@
+// @match        https://phonetool.amazon.com/users/*
+// @grant        GM_addStyle
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const TARGET_SELECTOR = '#job-history li';
+
+    const style = `
+        .date-diff-suffix {
+            font-size: 0.9em;
+            color: gray;
+            font-style: italic;
+            margin-left: 5px;
+        }
+    `;
+    (typeof GM_addStyle === 'function') ? GM_addStyle(style) : addStyleFallback(style);
+
+    function addStyleFallback(css) {
+        const s = document.createElement('style');
+        s.textContent = css;
+        document.head.appendChild(s);
+    }
+
+    const processed = new WeakSet();
+
+    // Updated regex: start date mandatory, end date optional
+    const dateRangeRegex = /(\d{4}[\/-]\d{2}[\/-]\d{2})(?:\s+to\s+(\d{4}[\/-]\d{2}[\/-]\d{2}))?/;
+
+    function parseDate(str) {
+        return new Date(str.replace(/\//g, '-'));
+    }
+
+    function formatDateDiff(fromDate, toDate) {
+        if (fromDate > toDate) [fromDate, toDate] = [toDate, fromDate];
+
+        let years = toDate.getFullYear() - fromDate.getFullYear();
+        let months = toDate.getMonth() - fromDate.getMonth();
+        let days = toDate.getDate() - fromDate.getDate();
+
+        if (days < 0) {
+            const prevMonth = new Date(toDate.getFullYear(), toDate.getMonth(), 0);
+            days += prevMonth.getDate();
+            months--;
+        }
+
+        if (months < 0) {
+            months += 12;
+            years--;
+        }
+
+        const parts = [];
+        if (years > 0) parts.push(`${years} yr${years > 1 ? 's' : ''}`);
+        if (months > 0) parts.push(`${months} mo${months > 1 ? 's' : ''}`);
+        if (days > 0 || parts.length === 0) parts.push(`${days} day${days !== 1 ? 's' : ''}`);
+
+        return parts.join(', ');
+    }
+
+    function processLiElements() {
+        const liElements = document.querySelectorAll(TARGET_SELECTOR);
+
+        liElements.forEach(li => {
+            if (processed.has(li)) return;
+
+            const text = li.textContent.trim();
+            const match = text.match(dateRangeRegex);
+            if (match) {
+                const [ , startStr, endStr ] = match;
+
+                const startDate = parseDate(startStr);
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                startDate.setHours(0, 0, 0, 0);
+
+                // We calculate diff from start date to today, ignoring end date presence
+                const isPast = startDate < today;
+                const isToday = startDate.getTime() === today.getTime();
+
+                let suffixText;
+                if (isToday) {
+                    suffixText = ' (starts today)';
+                } else {
+                    const diffStr = formatDateDiff(startDate, today);
+                    suffixText = isPast
+                        ? ` (${diffStr} ago)`
+                        : ` (${diffStr} remaining)`;
+                }
+
+                if (!li.innerHTML.includes('date-diff-suffix')) {
+                    const span = document.createElement('span');
+                    span.className = 'date-diff-suffix';
+                    span.textContent = suffixText;
+                    li.appendChild(span);
+                }
+
+                processed.add(li);
+            }
+        });
+    }
+
+    const interval = setInterval(processLiElements, 500);
+    setTimeout(() => clearInterval(interval), 30 * 1000); //30 seconds
+})();
